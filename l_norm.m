@@ -11,9 +11,6 @@ alogrithms = {'OFDM', 'OCDM', 'OFDM New-ICF', 'OFDM Varshney'};
 papr_OFDM_all = zeros(1, monte);  %记录papr
 r_OFDM_acc = zeros(2*N-1,1);      %记录ISL
 
-papr_OCDM_all = zeros(1, monte);  %记录papr
-r_OCDM_acc = zeros(2*N-1,1);      %记录ISL
-
 %% =============函数============
 PAPR_fun = @(x) max(abs(x(:)).^2) / mean(abs(x(:)).^2);
 FH = @(x) ifft(x)*sqrt(N);
@@ -76,35 +73,27 @@ for m = 1:monte
 
     % ===== 8. PAPR =====
     papr_OFDM_all(m) = PAPR_fun(x_OFDM);
-    papr_OCDM_all(m) = PAPR_fun(x_OCDM);
 
     r_OFDM_tmp=xcorr(x_OFDM);
-    r_OCDM_tmp=xcorr(x_OCDM);
 
     r_OFDM_acc=r_OFDM_acc+r_OFDM_tmp;
-    r_OCDM_acc=r_OCDM_acc+r_OCDM_tmp;
 
 end
 
 
 %% =============CCDF=============
 papr_OFDM_dB = 10*log10(papr_OFDM_all);
-papr_OCDM_dB = 10*log10(papr_OCDM_all);
 
 
 ccdf_OFDM = arrayfun(@(t) mean(papr_OFDM_dB > t), thresholds);
-ccdf_OCDM = arrayfun(@(t) mean(papr_OCDM_dB > t), thresholds);
 
 figure;
 semilogy(thresholds, ccdf_OFDM,'LineWidth',1.5);
-hold on;
-semilogy(thresholds, ccdf_OCDM,'LineWidth',1.5);
-hold off;
 grid on;
 xlabel('PAPR (dB)');
 ylabel('CCDF');
 title('CCDF of PAPR');
-legend('OFDM','OCDM');
+legend('OFDM');
 
 %% ==============xcorr==============
 lags=-(N-1):(N-1);
