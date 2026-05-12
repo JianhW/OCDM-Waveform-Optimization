@@ -4,9 +4,9 @@ Nc = 64;
 Nr = N - Nc;
 modSC = 'QPSK';
 monte = 1;        % Monte Carlo次数
-e = 0.3;              % 通信总能量
-thresholds = 0:0.2:8;
+e = 0.2;              % 通信总能量
 rng(32);
+pisl_iteration = 500;
 
 % ===== 波形配置 =====
 % 格式: {名称, 变换函数句柄}
@@ -16,34 +16,25 @@ waveforms = {
     'OCDM',         @(z) DFnT(N)' * z;
     'optimize_waveform_cvx',@(z) ifft(optimize_waveform_cvx(z, idx_comm, idx_radar)) * sqrt(N);
     'optimize_waveform_freq', @(z) ifft(optimize_waveform_freq(z, idx_comm, idx_radar)) * sqrt(N);
-    'l_norm_fixed' @(z) ifft(l_norm_fixed(z, idx_comm, idx_radar, 20 ,50)) * sqrt(N);
+    'OCDM-PISL-MM' @(z) DFnT(N)' * OCDM_PISL_MM(z, idx_comm, idx_radar, pisl_iteration, ...
+        'Transform', 'inverse', 'TotalNorm', 1);
 };
 
 nWave = length(waveforms);
 Progress = waitbar(0, 'Progress...');
 
 % ===== 预分配结果存储 =====
-papr_all = cell(1, nWave);      % PAPR结果
+pisl_all = cell(1, nWave);      % PISL结果
 
 for w = 1:nWave
-    papr_all{w} = zeros(1, monte);
+    pisl_all{w} = zeros(1, monte);
 end
 
 % 保存最后一次的频域信号z（用于画自相关）
 z_final = zeros(N, 1);
 
 %% =============函数============
-PAPR_fun = @(x) max(abs(x(:)).^2) / mean(abs(x(:)).^2);
-
-%DFnT matrix
-function DFnT_matrix=DFnT(P)
-    m=(0:P-1)'*ones(1,P);
-    n=ones(P,1)*(0:P-1);
-
-    fresnel_kernel=exp(1j*pi/P*(m-n).^2);
-    normalization=(1/sqrt(P))*exp((pi/4)*1j);
-    DFnT_matrix=normalization*fresnel_kernel;
-end
+PISL_fun = @(x) calc_PISL(x);
 
 
 %% ============monte carlo循环===========
@@ -102,7 +93,7 @@ for m = 1:monte
             case 5
                 time_signal = transform_func(z);
         end
-        papr_all{w}(m) = PAPR_fun(time_signal);
+        pisl_all{w}(m) = PISL_fun(time_signal);
     end
 
     % 保存最后一次的频域信号z（用于画单次自相关）
@@ -113,22 +104,24 @@ for m = 1:monte
 end
 
 
-%% =============CCDF=============
+%% =============PISL对比=============
 figure;
-colors = {'b-', 'r-', 'g-', 'm-', 'c-'};  % 颜色配置
+colors = {'b-', 'r-', 'g-', 'm-', 'c-', 'k-'};  % 颜色配置
+
+pisl_mean = zeros(1, nWave);
+for w = 1:nWave
+    pisl_mean(w) = mean(pisl_all{w});
+end
+bar(pisl_mean);
+grid on;
+set(gca, 'XTickLabel', waveforms(:,1));
+ylabel('Mean PISL');
+title(sprintf('PISL comparison (N=%d, Nc=%d, MC=%d)', N, Nc, monte));
+legend(waveforms(:,1), 'Location', 'northeast');
 
 for w = 1:nWave
-    papr_dB = 10*log10(papr_all{w});
-    ccdf = arrayfun(@(t) mean(papr_dB > t), thresholds);
-    semilogy(thresholds, ccdf, colors{w}, 'LineWidth', 1.5);
-    hold on;
+    fprintf('%s: Mean PISL = %.6e\n', waveforms{w,1}, pisl_mean(w));
 end
-hold off;
-grid on;
-xlabel('PAPR (dB)');
-ylabel('CCDF');
-title('CCDF of PAPR');
-legend(waveforms(:,1), 'Location', 'northeast');
 
 
 %% ==============自相关==============
@@ -140,20 +133,43 @@ for w = 1:nWave
     transform_func = waveforms{w, 2};
     x = transform_func(z_final);    % 用最后一次的z变换
     
-    r = xcorr(x);
-    r0 = r(N);
-    r_dB = 20*log10(max(abs(r)/max(abs(r0),1e-12),1e-12));
+    r = periodic_autocorr(x);
+    r_bilateral = [conj(flipud(r(2:end))); r];
+    r0 = r_bilateral(N);
+    r_dB = 20*log10(max(abs(r_bilateral)/max(abs(r0),1e-12),1e-12));
     plot(lags, r_dB, colors{w}, 'LineWidth', 2);
     hold on;
 end
 hold off;
 grid on;
 xlabel('Time Lag');
-ylabel('Autocorrelation Level (dB)');
-title('自相关特性（单次波形）');
+ylabel('Periodic Autocorrelation Level (dB)');
+title('周期自相关特性（单次波形）');
 ylim([-80 0]);
 xlim([-(N-1) N-1]);
 legend(waveforms(:,1), 'Location', 'northeast');
 
 close(Progress);
 disp('Done!');
+
+function pisl = calc_PISL(x)
+    x = x(:);
+    r = periodic_autocorr(x);
+    r(1) = 0;
+    pisl = 2 * sum(abs(r).^2);
+    pisl = real(pisl);
+end
+
+function r = periodic_autocorr(x)
+    x = x(:);
+    r = ifft(abs(fft(x)).^2);
+end
+
+function DFnT_matrix=DFnT(P)
+    m=(0:P-1)'*ones(1,P);
+    n=ones(P,1)*(0:P-1);
+
+    fresnel_kernel=exp(1j*pi/P*(m-n).^2);
+    normalization=(1/sqrt(P))*exp(1j*pi/4);
+    DFnT_matrix=normalization*fresnel_kernel;
+end
